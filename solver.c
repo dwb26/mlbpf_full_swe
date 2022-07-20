@@ -124,7 +124,6 @@ void flux(double * W, double * W_flux) {
 void compute_W_HLL(double * W_HLL, double lmbda_L, double lmbda_R, double * W_L, double * W_R, double * W_flux_L, double * W_flux_R) {
 	flux(W_L, W_flux_L);
 	flux(W_R, W_flux_R);
-	// W_HLL[0] = (lmbda_R * W_R - lmbda_L * W_L + flux(W_L, W_flux) - flux(W_R, W_flux)) / (lmbda_R - lmbda_L);
 	W_HLL[0] = (lmbda_R * W_R[0] - lmbda_L * W_L[0] + W_flux_L[0] - W_flux_R[0]) / (lmbda_R - lmbda_L);
 	W_HLL[1] = (lmbda_R * W_R[1] - lmbda_L * W_L[1] + W_flux_L[1] - W_flux_R[1]) / (lmbda_R - lmbda_L);
 	assert(W_HLL[0] >= 0.0);
@@ -168,6 +167,77 @@ double compute_S_dx(double h_L, double h_R, double Z_L, double Z_R, double dx) {
 }
 
 
+double compute_q_star(double q_HLL, double S_dx, double lmbda_L, double lmbda_R) {
+	/**
+	 * This is the discharge component of the intermediate states. Note that there is only one since we set q_L* = q_R*
+	 */
+	return q_HLL * S_dx / (lmbda_R - lmbda_L);
+}
+
+
+double compute_S_dx_by_alph(double h_L, double h_R, double Z_L, double Z_R, double S_dx, double q_star) {
+
+	if ( (h_L < ZERO_THRESH) && (h_R < ZERO_THRESH) )
+		return 0.0;
+	else if ( (h_L < ZERO_THRESH) || (h_R < ZERO_THRESH) )
+		return -(Z_R - Z_L);
+	else {
+		double alph = -(q_star * q_star) / (h_L * h_R) + 0.5 * GR * (h_L + h_R);
+		return S_dx / alph;
+	}
+
+}
+
+
+void compute_h_stars(double * h_stars, double h_HLL, double lmbda_L, double lmbda_R, double S_dx_by_alph, double h_L, double h_R) {
+	/**
+	 * Computes the lefy and right intermediate height states
+	 */
+	double eps = h_L < h_R ? h_L : h_R;
+	eps = eps < h_HLL ? eps: h_HLL;
+	double lmbda_jump = lmbda_R - lmbda_L;
+	double lmbda_R_rat = lmbda_R / lmbda_L;
+	double lmbda_L_rat = lmbda_L / lmbda_R;
+	assert(eps >= 0);
+
+	/* Compute the left intermediate height states */
+	double term = h_HLL - lmbda_R * S_dx_by_alph / lmbda_jump;
+	double a = term > eps ? term : eps;
+	double b = (1 - lmbda_R_rat) * h_HLL + lmbda_R_rat * eps;
+	h_stars[0] = a < b ? a : b;
+
+	/* Compute the right intermediate height states */
+	term = h_HLL - lmbda_L * S_dx_by_alph / lmbda_jump;
+	a = term < eps ? term : eps;
+	b = (1 - lmbda_L_rat) * h_HLL + lmbda_L_rat * eps;
+	h_stars[1] = a < b ? a : b;
+
+	double diff = lmbda_R * h_stars[1] - lmbda_L * h_stars[0] - lmbda_jump * h_HLL;
+	assert(diff <= 2.0 * ZERO_THRESH);
+
+}
+
+
+double compute_timestep(double lmbda_L_max, double lmbda_R_max, double dx) {
+	/**
+	 * Compute the time increment using the maximum magnitude wavespeed and a CFL type condition
+	 */
+	double lmbda_max = fabs(lmbda_L_max) > lmbda_R_max ? fabs(lmbda_L_max) : lmbda_R_max;
+	assert (lmbda_max > 0);
+	double dt = 0.5 * dx / lmbda_max;
+	assert (dt / dx <= 1);
+	return dt;
+
+}
+
+
+void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double dt, int nx, double * Z, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars) {
+
+	
+	
+}
+
+
 void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** W_R_stars, double * lmbda_neg, double * lmbda_pos, double * Z, int nx, double dx, double T_stop, double * xs, double k, double gamma_of_k, double sig_theta, FILE * CURVE_DATA, FILE * TOP_DATA, FILE * TIMES) {
 
 	/**
@@ -178,12 +248,14 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 
 	int n = 0;
 	double t = 0, dt = 0.1;
-	double Z_L, Z_R, h_L, h_R, q_L, q_R, h_HLL, q_HLL, S_dx, q_star, S_dx_by_alph, h_L_star, h_R_star, lmbda_L, lmbda_R, lmbda_jump;
+	double Z_L, Z_R, h_L, h_R, q_L, q_R, h_HLL, q_HLL, S_dx, q_star, S_dx_by_alph, lmbda_L, lmbda_R;
+	double lmbda_L_max, lmbda_R_max;
 	double * W_L = (double *) malloc(2 * sizeof(double));
 	double * W_R = (double *) malloc(2 * sizeof(double));
 	double * W_HLL = (double *) malloc(2 * sizeof(double));
 	double * W_flux_L = (double *) calloc(2, sizeof(double));
 	double * W_flux_R = (double *) calloc(2, sizeof(double));
+	double * h_stars = (double *) calloc(2, sizeof(double));
 	double height = 0.2, centre = 10.0; // Temporary. These will be the random walk
 	gen_Z_drain(nx, xs, Z, height, centre);
 	for (int j = 0; j < nx + 2; j++)
@@ -191,6 +263,7 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 	
 	while (t <= T_stop) {
 
+		lmbda_L_max = 0.0, lmbda_R_max = 0.0;
 		for (int j = 0; j < nx + 2; j++)
 			memcpy(W[j], W_forward[j], 2 * sizeof(double));
 
@@ -211,17 +284,23 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 
 			/* Compute the wave speeds and the HLL terms */
 			compute_wave_speeds(W_L, W_R, lmbda_neg, lmbda_pos, j);
-			lmbda_L = lmbda_neg[j], lmbda_R = lmbda_pos[j], lmbda_jump = lmbda_R - lmbda_L;
+			lmbda_L = lmbda_neg[j], lmbda_R = lmbda_pos[j];
+			lmbda_L_max = lmbda_L_max < lmbda_L ? lmbda_L_max : lmbda_L;
+			lmbda_R_max = lmbda_R_max > lmbda_R ? lmbda_R_max : lmbda_R;
 			compute_W_HLL(W_HLL, lmbda_neg[j], lmbda_pos[j], W_L, W_R, W_flux_L, W_flux_R);
 			h_HLL = W_HLL[0], q_HLL = W_HLL[1];
 
 			/* Compute the intermediate states */
 			S_dx = compute_S_dx(h_L, h_R, Z_L, Z_R, dx);
-
+			q_star = compute_q_star(q_HLL, S_dx, lmbda_L, lmbda_R);
+			S_dx_by_alph = compute_S_dx_by_alph(h_L, h_R, Z_L, Z_R, S_dx, q_star);
+			compute_h_stars(h_stars, h_HLL, lmbda_L, lmbda_R, S_dx_by_alph, h_L, h_R);
+			W_L_stars[j][0] = h_stars[0], W_L_stars[j][1] = q_star;
+			W_R_stars[j][0] = h_stars[1], W_R_stars[j][1] = q_star;
 
 		}
-
-
+		dt = compute_timestep(lmbda_L_max, lmbda_R_max, dx);
+		MUSCL_forward_solution(W_forward, W, dx, dt, nx, Z, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars);
 		t += dt, n++;
 
 	}
