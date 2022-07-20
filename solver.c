@@ -14,6 +14,9 @@ const double GR = 9.81;
 const double ZERO_THRESH = 1e-16;
 const double GLOB_EPS = 1e-10;
 const double C_CUTOFF = 1.35;
+const double m_glob = 0.5;
+const double M_glob = 1e-10;
+
 
 void gen_Z_drain(int nx, double * xs, double * Z, double height, double centre) {
 	for (int j = 0; j < nx + 2; j++) {
@@ -231,10 +234,198 @@ double compute_timestep(double lmbda_L_max, double lmbda_R_max, double dx) {
 }
 
 
+double compute_theta(double ** W, double * Z, double dx, int j) {
+	/**
+	 * This is a parameter that describes the convexity of the reconstruction. Depends only on h and q.
+	 */
+
+	double h_L, h_M, h_R, q_L, q_M, q_R, Z_L, Z_M, Z_R, S_dx_LM, S_dx_MR, psi_LM, psi_MR, a, b, varphi, theta;
+	double * W_L = (double *) malloc(2 * sizeof(double));
+	double * W_M = (double *) malloc(2 * sizeof(double));
+	double * W_R = (double *) malloc(2 * sizeof(double));
+
+	memcpy(W_L, W[j - 1], 2 * sizeof(double));
+	memcpy(W_M, W[j], 2 * sizeof(double));
+	memcpy(W_R, W[j + 1], 2 * sizeof(double));
+	Z_L = Z[j - 1], Z_M = Z[j], Z_R = Z[j + 1];
+	h_L = W_L[0], q_L = W_L[1];
+	h_M = W_M[0], q_M = W_M[1];
+	h_R = W_R[0], q_R = W_R[1];
+	S_dx_LM = compute_S_dx(h_L, h_M, Z_L, Z_M, dx);
+	S_dx_MR = compute_S_dx(h_M, h_R, Z_M, Z_R, dx);
+
+	/* Compute the boundary psi terms */
+	if (h_L < ZERO_THRESH) {
+		if (h_M < ZERO_THRESH)
+			psi_LM = -S_dx_LM;
+		else
+			psi_LM = q_M * q_M / h_M + 0.5 * GR * h_M * h_M - S_dx_LM;
+	}
+	else if (h_M < ZERO_THRESH) {
+		if (h_L < ZERO_THRESH)
+			psi_LM = -S_dx_LM;
+		else
+			psi_LM = -q_L * q_L / h_L - 0.5 * GR * h_L * h_L - S_dx_LM;
+	}
+	else
+		psi_LM = q_M * q_M / h_M - q_L * q_L / h_L + 0.5 * GR * (h_M * h_M - h_L * h_L) - S_dx_LM;
+
+	if (h_M < ZERO_THRESH) {
+		if (h_R < ZERO_THRESH)
+			psi_MR = -S_dx_MR;
+		else
+			psi_MR = q_R * q_R / h_R + 0.5 * GR * h_R * h_R - S_dx_MR;
+	}
+	else if (h_R < ZERO_THRESH) {
+		if (h_M < ZERO_THRESH)
+			psi_MR = -S_dx_MR;
+		else
+			psi_MR = -q_M * q_M / h_M - 0.5 * GR * h_M * h_M - S_dx_MR;
+	}
+	else
+		psi_MR = q_R * q_R / h_R - q_M * q_M / h_M + 0.5 * GR * (h_R * h_R - h_M * h_M) - S_dx_MR;
+
+
+	/* Compute the centred-cell varphi term */
+	a = sqrt((q_M - q_L) * (q_M - q_L) + psi_LM * psi_LM);
+	b = sqrt((q_R - q_M) * (q_R - q_M) + psi_MR * psi_MR);
+	varphi = a + b;
+
+	/* Compute the centred-cell theta term */
+	if (varphi < m_glob * dx)
+		theta = 0.0;
+	else if (varphi <= M_glob * dx)
+		theta = (varphi - m_glob * dx) / (M_glob * dx - m_glob * dx);
+	else
+		theta = 1.0;
+
+	assert( (theta >= 0) && (theta <= 1) );
+
+	free(W_L);
+	free(W_M);
+	free(W_R);
+
+	return theta;
+
+}
+
+
+double minmod(double a, double b) {
+
+	if ( (fabs(a) < fabs(b)) && (a * b > 0) )
+		return a;
+	else if ( (fabs(b) < fabs(a)) && (a * b > 0) )
+		return b;
+	else
+		return 0.0;
+
+}
+
+
+double compute_slope(double * v, double dx, int j) {
+	/**
+	 * Computes the slope of the linear reconstruction corresponding to the same cell w_M is considered on.
+	 */
+	double v_L, v_M, v_R;
+	v_L = v[j - 1], v_M = v[j], v_R = v[j + 1];
+	return minmod((v_R - v_M) / dx, (v_M - v_L) / dx);
+
+}
+
+
 void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double dt, int nx, double * Z, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars) {
 
-	
-	
+
+	/* -------------------------------------------------------------------------------------------------------------- */
+	/*  																											  */
+	/* Array definition 																							  */
+	/*  																											  */
+	/* -------------------------------------------------------------------------------------------------------------- */
+	double h_LM, q_LM, h_ML, q_ML, h_MR, q_MR, h_RM, q_RM;
+	double * h = (double *) malloc((nx + 2) * sizeof(double));
+	double * q = (double *) malloc((nx + 2) * sizeof(double));
+	double * h_plus_Z = (double *) malloc((nx + 2) * sizeof(double));
+	for (int j = 0; j < nx + 2; j++) {
+		h[j] = W[j][0];
+		q[j] = W[j][1];
+		h_plus_Z[j] = h[j] + Z[j];
+	}
+	double * thetas = (double *) calloc((nx + 2), sizeof(double));
+	double ** slopes = (double **) malloc(3 * sizeof(double *));
+	for (int m = 0; m < 3; m++)
+		slopes[m] = (double *) calloc((nx + 2), sizeof(double));
+	double ** W_tilde = (double **) malloc((nx + 2) * sizeof(double *));
+	double ** gs = (double **) malloc((nx + 2) * sizeof(double *));
+	for (int m = 0; m < nx + 2; m++) {
+		W_tilde[m] = (double *) malloc(2 * sizeof(double));
+		memcpy(W_tilde[m], W[m], 2 * sizeof(double));
+		gs[m] = (double *) malloc(2 * sizeof(double));
+	}
+	double * h_MUSCL = (double *) malloc(4 * sizeof(double));
+	double * q_MUSCL = (double *) malloc(4 * sizeof(double));
+	double * Z_MUSCL = (double *) malloc(4 * sizeof(double));
+	double * W_LM = (double *) malloc(2 * sizeof(double));
+	double * W_ML = (double *) malloc(2 * sizeof(double));
+	double * W_MR = (double *) malloc(2 * sizeof(double));
+	double * W_RM = (double *) malloc(2 * sizeof(double));
+	double * h_tilde = (double *) malloc((nx + 2) * sizeof(double));
+	double * q_tilde = (double *) malloc((nx + 2) * sizeof(double));
+	double * h_plus_Z_tilde = (double *) malloc((nx + 2) * sizeof(double));
+
+
+
+	/* -------------------------------------------------------------------------------------------------------------- */
+	/*  																											  */
+	/* Basic MUSCL reconstruction																					  */
+	/*  																											  */
+	/* -------------------------------------------------------------------------------------------------------------- */
+	for (int j = 1; j < nx + 1; j++) {
+
+		/* Compute the theta parameters for the convex MUSCL reconstruction */
+		thetas[j] = compute_theta(W, Z, dx, j);
+
+		/* Compute the respective slopes */
+		slopes[0][j] = compute_slope(h, dx, j);
+		slopes[0][j] = compute_slope(q, dx, j);
+		slopes[0][j] = compute_slope(h_plus_Z, dx, j);
+
+	}
+
+	/* Apply the forward formula */
+
+
+
+
+
+
+	/* -------------------------------------------------------------------------------------------------------------- */
+	/*  																											  */
+	/* Stable forward time MUSCL reconstruction																		  */
+	/*  																											  */
+	/* -------------------------------------------------------------------------------------------------------------- */
+
+
+
+
+
+	free(h);
+	free(q);
+	free(h_plus_Z);
+	free(thetas);
+	free(slopes);
+	free(W_tilde);
+	free(gs);
+	free(h_MUSCL);
+	free(q_MUSCL);
+	free(Z_MUSCL);
+	free(W_LM);
+	free(W_ML);
+	free(W_MR);
+	free(W_RM);
+	free(h_tilde);
+	free(q_tilde);
+	free(h_plus_Z_tilde);
+
 }
 
 
