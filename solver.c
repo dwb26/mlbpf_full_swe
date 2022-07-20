@@ -166,7 +166,6 @@ double compute_S_dx(double h_L, double h_R, double Z_L, double Z_R, double dx) {
 		double b = 0.5 * GR * pow(h_C, 3) / (h_L + h_R);
 		return a + b;
 	}
-
 }
 
 
@@ -333,6 +332,71 @@ double compute_slope(double * v, double dx, int j) {
 }
 
 
+void MUSCL_reconstruction(double * v_MUSCL, double * v, double * slopes, double * thetas, double dx, int j) {
+
+	double v_LM, v_ML, v_MR, v_RM;
+	v_LM = v[j - 1] + 0.5 * dx * slopes[j - 1] * thetas[j - 1];
+	v_ML = v[j] - 0.5 * dx * slopes[j] * thetas[j];
+	v_MR = v[j] + 0.5 * dx * slopes[j] * thetas[j];
+	v_RM = v[j + 1] - 0.5 * dx * slopes[j + 1] * thetas[j + 1];
+	v_MUSCL[0] = v_LM, v_MUSCL[1] = v_ML, v_MUSCL[2] = v_MR, v_MUSCL[3] = v_RM;
+
+}
+
+
+void numerical_flux(double * flux_vec, double * W_L, double * W_R, double lmbda_L, double lmbda_R, double * W_L_star, double * W_R_star) {
+
+	double * a_flux = (double *) malloc(2 * sizeof(double));
+	double * a_flux_L = (double *) malloc(2 * sizeof(double));
+	double * a_flux_R = (double *) malloc(2 * sizeof(double));
+	double * b_flux = (double *) malloc(2 * sizeof(double));
+	double * c_flux = (double *) malloc(2 * sizeof(double));
+
+	flux(W_L, a_flux_L);
+	flux(W_R, a_flux_R);
+	for (int m = 0; m < 2; m++) {
+		a_flux[m] = 0.5 * (a_flux_L - a_flux_R);
+		b_flux[m] = 0.5 * lmbda_L * (W_L_star[m] - W_L[m]);
+		c_flux[m] = 0.5 * lmbda_R * (W_R_star[m] - W_R[m]);
+		flux_vec[m] = a_flux[m] + b_flux[m] + c_flux[m];
+	}
+
+	free(a_flux);
+	free(a_flux_L);
+	free(a_flux_R);
+	free(b_flux);
+	free(c_flux);
+
+}
+
+
+void g_eval(double * g_eval_vec, double * W_LM, double * W_ML, double * W_MR, double * W_RM, double Z_LM, double Z_ML, double Z_MR, double Z_RM, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars, double dx, int j) {
+
+	double h_LM, h_ML, h_MR, h_RM;
+	double * flux_MR = (double *) malloc(2 * sizeof(double));
+	double * flux_LM = (double *) malloc(2 * sizeof(double));
+	double * s_MR = (double *) calloc(2, sizeof(double));
+	double * s_LM = (double *) calloc(2, sizeof(double));
+	h_LM = W_LM[0], h_ML = W_ML[0], h_MR = W_MR[0], h_RM = W_RM[0];
+
+	/* Produce the flux approximations */
+	numerical_flux(flux_MR, W_MR, W_RM, lmbda_neg[j], lmbda_pos[j], W_L_stars[j], W_R_stars[j]);
+	numerical_flux(flux_LM, W_LM, W_ML, lmbda_neg[j - 1], lmbda_pos[j - 1], W_L_stars[j - 1], W_R_stars[j - 1]);
+
+	/* Produce the source term approximations */
+	s_MR[1] = compute_S_dx(h_MR, h_RM, Z_MR, Z_RM, dx) / dx;
+	s_LM[1] = compute_S_dx(h_LM, h_ML, Z_LM, Z_ML, dx) / dx;
+	for (int m = 0; m < 2; m++)
+		g_eval_vec[m] = -1.0 / dx * (flux_MR[m] - flux_LM[m]) + 0.5 * (s_MR[m] + s_LM[m]);
+	
+	free(flux_MR);
+	free(flux_LM);
+	free(s_MR);
+	free(s_LM);
+
+}
+
+
 void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double dt, int nx, double * Z, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars) {
 
 
@@ -341,7 +405,7 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	/* Array definition 																							  */
 	/*  																											  */
 	/* -------------------------------------------------------------------------------------------------------------- */
-	double h_LM, q_LM, h_ML, q_ML, h_MR, q_MR, h_RM, q_RM;
+	double h_LM, q_LM, Z_LM, h_ML, q_ML, Z_ML, h_MR, q_MR, Z_MR, h_RM, q_RM, Z_RM;
 	double * h = (double *) malloc((nx + 2) * sizeof(double));
 	double * q = (double *) malloc((nx + 2) * sizeof(double));
 	double * h_plus_Z = (double *) malloc((nx + 2) * sizeof(double));
@@ -370,7 +434,9 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	double * W_RM = (double *) malloc(2 * sizeof(double));
 	double * h_tilde = (double *) malloc((nx + 2) * sizeof(double));
 	double * q_tilde = (double *) malloc((nx + 2) * sizeof(double));
+	// double * Z_tilde = (double *) malloc((nx + 2) * sizeof(double));
 	double * h_plus_Z_tilde = (double *) malloc((nx + 2) * sizeof(double));
+	double * g_tilde = (double *) malloc(2 * sizeof(double));
 
 
 
@@ -392,10 +458,33 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	}
 
 	/* Apply the forward formula */
+	for (int j = 1; j < nx + 1; j++) {
 
+		/* Height MUSCL reconstruction */
+		MUSCL_reconstruction(h_MUSCL, h, slopes[0], thetas, dx, j);
+		h_LM = h_MUSCL[0], h_ML = h_MUSCL[1], h_MR = h_MUSCL[2], h_RM = h_MUSCL[3];
 
+		/* Discharge MUSCL reconstruction */
+		MUSCL_reconstruction(q_MUSCL, q, slopes[1], thetas, dx, j);
+		q_LM = q_MUSCL[0], q_ML = q_MUSCL[1], q_MR = q_MUSCL[2], q_RM = q_MUSCL[3];
 
+		/* Topography MUSCL reconstruction */
+		MUSCL_reconstruction(Z_MUSCL, h_plus_Z, slopes[2], thetas, dx, j);
+		Z_LM = Z_MUSCL[0], Z_ML = Z_MUSCL[1], Z_MR = Z_MUSCL[2], Z_RM = Z_MUSCL[3];
+		Z_LM -= h_LM, Z_ML -= h_ML, Z_MR -= h_MR, Z_RM -= h_RM;
 
+		/* Vector entries */
+		W_LM[0] = h_LM, W_LM[1] = q_LM;
+		W_ML[0] = h_ML, W_ML[1] = q_ML;
+		W_MR[0] = h_MR, W_MR[1] = q_MR;
+		W_RM[0] = h_RM, W_RM[1] = q_RM;
+
+		/* Intermediate state */
+		g_eval(gs[j], W_LM, W_ML, W_MR, W_RM, Z_LM, Z_ML, Z_MR, Z_RM, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars, dx, j);
+		for (int m = 0; m < 2; m++)
+			W_tilde[j][m] = W[j][m] + dt * gs[j][m];
+
+	}
 
 
 	/* -------------------------------------------------------------------------------------------------------------- */
@@ -403,10 +492,51 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	/* Stable forward time MUSCL reconstruction																		  */
 	/*  																											  */
 	/* -------------------------------------------------------------------------------------------------------------- */
+	for (int j = 0; j < nx + 2; j++) {
+		h_tilde[j] = W_tilde[j][0];
+		q_tilde[j] = W_tilde[j][1];
+		h_plus_Z_tilde[j] = h_tilde[j] + Z[j];
+	}
+	for (int j = 1; j < nx + 1; j++) {
 
+		/* Compute the theta parameters for the convex MUSCL reconstruction */
+		thetas[j] = compute_theta(W_tilde, Z, dx, j);
 
+		/* Compute the respective slopes */
+		slopes[0][j] = compute_slope(h_tilde, dx, j);
+		slopes[0][j] = compute_slope(q_tilde, dx, j);
+		slopes[0][j] = compute_slope(h_plus_Z_tilde, dx, j);
 
+	}
 
+	/* Apply the forward formula */
+	for (int j = 1; j < nx + 1; j++) {
+
+		/* Height MUSCL reconstruction */
+		MUSCL_reconstruction(h_MUSCL, h_tilde, slopes[0], thetas, dx, j);
+		h_LM = h_MUSCL[0], h_ML = h_MUSCL[1], h_MR = h_MUSCL[2], h_RM = h_MUSCL[3];
+
+		/* Discharge MUSCL reconstruction */
+		MUSCL_reconstruction(q_MUSCL, q_tilde, slopes[1], thetas, dx, j);
+		q_LM = q_MUSCL[0], q_ML = q_MUSCL[1], q_MR = q_MUSCL[2], q_RM = q_MUSCL[3];
+
+		/* Topography MUSCL reconstruction */
+		MUSCL_reconstruction(Z_MUSCL, h_plus_Z_tilde, slopes[2], thetas, dx, j);
+		Z_LM = Z_MUSCL[0], Z_ML = Z_MUSCL[1], Z_MR = Z_MUSCL[2], Z_RM = Z_MUSCL[3];
+		Z_LM -= h_LM, Z_ML -= h_ML, Z_MR -= h_MR, Z_RM -= h_RM;
+
+		/* Vector entries */
+		W_LM[0] = h_LM, W_LM[1] = q_LM;
+		W_ML[0] = h_ML, W_ML[1] = q_ML;
+		W_MR[0] = h_MR, W_MR[1] = q_MR;
+		W_RM[0] = h_RM, W_RM[1] = q_RM;
+
+		/* Intermediate state */
+		g_eval(g_tilde, W_LM, W_ML, W_MR, W_RM, Z_LM, Z_ML, Z_MR, Z_RM, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars, dx, j);
+		for (int m = 0; m < 2; m++)
+			W[j][m] = W[j][m] + 0.5 * dt * (gs[j][m] + g_tilde[m]);
+
+	}
 
 	free(h);
 	free(q);
@@ -425,6 +555,7 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	free(h_tilde);
 	free(q_tilde);
 	free(h_plus_Z_tilde);
+	free(g_tilde);
 
 }
 
@@ -438,7 +569,7 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 	*/
 
 	int n = 0;
-	double t = 0, dt = 0.1;
+	double t = 0.0, dt;
 	double Z_L, Z_R, h_L, h_R, q_L, q_R, h_HLL, q_HLL, S_dx, q_star, S_dx_by_alph, lmbda_L, lmbda_R;
 	double lmbda_L_max, lmbda_R_max;
 	double * W_L = (double *) malloc(2 * sizeof(double));
