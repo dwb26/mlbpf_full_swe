@@ -57,8 +57,10 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	int obs_pos = nx;
 	double sig_sd = 1.0;
 	double obs_sd = 0.1;
-	double space_left = 1.0, space_right = 26.0;
-	double T_stop = 1.0;
+	// double space_left = 1.0, space_right = 26.0;
+	double space_left = 0.0, space_right = 25.0;
+	double T_stop = 1000.0;
+	// double T_stop = 10.0;
 	double dx = (space_right - space_left) / (double) (nx + 1);
 	double k = 5.5, theta = 2.0, obs;
 	double lower_bound = 1.5, upper_bound = 8.0 + lower_bound;
@@ -68,6 +70,12 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	double * Z = (double *) malloc((nx + 2) * sizeof(double));
 	double * lmbda_neg = (double *) calloc(nx + 1, sizeof(double));
 	double * lmbda_pos = (double *) calloc(nx + 1, sizeof(double));
+	double * W_L = (double *) malloc(2 * sizeof(double));
+	double * W_R = (double *) malloc(2 * sizeof(double));
+	double * W_HLL = (double *) malloc(2 * sizeof(double));
+	double * W_flux_L = (double *) calloc(2, sizeof(double));
+	double * W_flux_R = (double *) calloc(2, sizeof(double));
+	double * h_stars = (double *) calloc(2, sizeof(double));
 	double ** W = (double **) malloc((nx + 2) * sizeof(double *));
 	double ** W_forward = (double **) malloc((nx + 2) * sizeof(double *));
 	double ** W_L_stars = (double **) malloc((nx + 1) * sizeof(double *));
@@ -84,14 +92,13 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 		xs[j] = space_left + (j - 1) * dx;
 		W[j] = (double *) calloc(2, sizeof(double));
 		W_forward[j] = (double *) calloc(2, sizeof(double));
-		// W_forward[j] = W[j];
 	}
 	for (int j = 0; j < nx + 1; j++) {
 		W_L_stars[j] = (double *) calloc(2, sizeof(double));
 		W_R_stars[j] = (double *) calloc(2, sizeof(double));
 	}
 
-	/* Construct the initial topography profile */
+	/* Construct the initial conditions */
 	gen_Z_drain(nx, xs, Z, height, centre);
 	for (int j = 0; j < nx + 2; j++)
 		W[j][0] = 0.5 - Z[j];
@@ -103,7 +110,7 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 
 		/* Generate the artificial HMM data points */
 		sig_theta = sigmoid(theta, upper_bound, lower_bound);
-		WB_solver(W, W_forward, W_L_stars, W_R_stars, lmbda_neg, lmbda_pos, Z, nx, dx, T_stop, xs, k, gamma_of_k, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
+		WB_solver(W, W_forward, W_L_stars, W_R_stars, lmbda_neg, lmbda_pos, Z, xs, W_L, W_R, W_HLL, W_flux_L, W_flux_R, h_stars, nx, dx, T_stop, k, gamma_of_k, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
 		// obs = h[obs_pos] + gsl_ran_gaussian(rng, obs_sd);
 		obs = 0.0;
 		fprintf(DATA_OUT, "%.16e %.16e\n", sig_theta, obs);
@@ -122,6 +129,12 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	free(Z);
 	free(lmbda_neg);
 	free(lmbda_pos);
+	free(W_L);
+	free(W_R);
+	free(W_HLL);
+	free(W_flux_L);
+	free(W_flux_R);
+	free(h_stars);
 	free(W);
 	free(W_forward);
 	free(W_L_stars);

@@ -47,7 +47,7 @@ int main(void) {
 	/* -------------------------- */
 	int N_data = 1;
 	int N_trials = 10;
-	int length = 1, nx = 500;
+	int length = 1, nx = 200;
 	int N_ref = 500000;
 	// int N_ref = 50000;
 	// int N_bpf = 1000;

@@ -9,15 +9,16 @@ times_f = open("times.txt", "r")
 # hmm_data_f = open("hmm_data.txt", "r")
 
 length = 1
-nx = 500
-space_left = 1.0; space_right = 26.0
+nx = 200
+space_left = 0.0; space_right = 25.0
 thetas = []; obs = []
 h = []
 for line in curve_data_f:
 	h.extend(list(map(float, line.split())))
 total_length = int(h[-1])
 
-times = np.array(list(map(float, times_f.readline().split()))) * 100
+# times = np.array(list(map(float, times_f.readline().split()))) * 100
+times = np.array(list(map(float, times_f.readline().split())))
 minutes = np.zeros(total_length)
 n_mins = 0
 for n in range(1, total_length):
@@ -55,5 +56,5 @@ def update(n):
 	ax.set(ylim=np.min(Z_arr) - 0.1)
 	return line1, line2,
 
-ani = animation.FuncAnimation(fig, func=update, frames=range(0, total_length, 1))
+ani = animation.FuncAnimation(fig, func=update, frames=range(0, total_length, 55))
 plt.show()

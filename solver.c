@@ -39,7 +39,6 @@ void prescribe_left_bcs(double ** W, double dx, double t) {
 
 
 void prescribe_right_bcs(double ** W, int nx) {
-
 	double uN, hN = W[nx][0];
 	if (hN <= ZERO_THRESH)
 		uN = 0.0;
@@ -49,7 +48,6 @@ void prescribe_right_bcs(double ** W, int nx) {
 	hR = hR < hN ? hR : hN;
 	double qR = hR / 3.0 * (uN + 2 * sqrt(GR * hN));
 	W[nx + 1][0] = hR, W[nx + 1][1] = qR;
-
 }
 
 
@@ -66,7 +64,6 @@ void output_data(double ** W, double * Z, int nx, double t, double sig_theta, FI
 
 
 void zero_cutoff(double * W_L, double * W_R) {
-
 	double h_L = W_L[0], h_R = W_R[0];
 	if ( (h_L < ZERO_THRESH) && (h_R < ZERO_THRESH) )
 		W_L[0] = 0.0, W_L[1] = 0.0, W_R[0] = 0.0, W_R[1] = 0.0;
@@ -129,6 +126,7 @@ void compute_W_HLL(double * W_HLL, double lmbda_L, double lmbda_R, double * W_L,
 	flux(W_R, W_flux_R);
 	W_HLL[0] = (lmbda_R * W_R[0] - lmbda_L * W_L[0] + W_flux_L[0] - W_flux_R[0]) / (lmbda_R - lmbda_L);
 	W_HLL[1] = (lmbda_R * W_R[1] - lmbda_L * W_L[1] + W_flux_L[1] - W_flux_R[1]) / (lmbda_R - lmbda_L);
+	// printf("%lf\n", W_HLL[0]);
 	assert(W_HLL[0] >= 0.0);
 }
 
@@ -158,7 +156,7 @@ double compute_S_dx(double h_L, double h_R, double Z_L, double Z_R, double dx) {
 	double Z_diff  = Z_R - Z_L;
 	if ( (h_L < ZERO_THRESH) && (h_R < ZERO_THRESH) )
 		return 0.0;
-	else if ( (h_L) < ZERO_THRESH || (h_R < ZERO_THRESH) )
+	else if ( (h_L < ZERO_THRESH) || (h_R < ZERO_THRESH) )
 		return -0.5 * GR * Z_diff * (h_L + h_R);
 	else {
 		double h_C = h_cutoff(h_L, h_R, dx);
@@ -210,12 +208,12 @@ void compute_h_stars(double * h_stars, double h_HLL, double lmbda_L, double lmbd
 
 	/* Compute the right intermediate height states */
 	term = h_HLL - lmbda_L * S_dx_by_alph / lmbda_jump;
-	a = term < eps ? term : eps;
+	a = term > eps ? term : eps;
 	b = (1 - lmbda_L_rat) * h_HLL + lmbda_L_rat * eps;
 	h_stars[1] = a < b ? a : b;
 
 	double diff = lmbda_R * h_stars[1] - lmbda_L * h_stars[0] - lmbda_jump * h_HLL;
-	assert(diff <= 2.0 * ZERO_THRESH);
+	assert(diff <= 1e-10);
 
 }
 
@@ -434,7 +432,6 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 	double * W_RM = (double *) malloc(2 * sizeof(double));
 	double * h_tilde = (double *) malloc((nx + 2) * sizeof(double));
 	double * q_tilde = (double *) malloc((nx + 2) * sizeof(double));
-	// double * Z_tilde = (double *) malloc((nx + 2) * sizeof(double));
 	double * h_plus_Z_tilde = (double *) malloc((nx + 2) * sizeof(double));
 	double * g_tilde = (double *) malloc(2 * sizeof(double));
 
@@ -560,26 +557,21 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 }
 
 
-void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** W_R_stars, double * lmbda_neg, double * lmbda_pos, double * Z, int nx, double dx, double T_stop, double * xs, double k, double gamma_of_k, double sig_theta, FILE * CURVE_DATA, FILE * TOP_DATA, FILE * TIMES) {
+void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** W_R_stars, double * lmbda_neg, double * lmbda_pos, double * Z, double * xs, double * W_L, double * W_R, double * W_HLL, double * W_flux_L, double * W_flux_R, double * h_stars, int nx, double dx, double T_stop, double k, double gamma_of_k, double sig_theta, FILE * CURVE_DATA, FILE * TOP_DATA, FILE * TIMES) {
 
 	/**
 	 * This is the well-balanced solver within which we apply the conservative formula. To do this we need to compute 	the time increment, the wave speeds and the intermediate states at each time iterate. We apply the conservative formula until T_stop is exceeded.
 	 * 	nx :: number of cells
 		The space discretisation consists in cells (x_{i - 1/2}, x_{i + 1/2}) of volume dx and centered at x_i = x_{i - 1/2} + dx / 2
 	*/
-
 	int n = 0;
 	double t = 0.0, dt;
 	double Z_L, Z_R, h_L, h_R, q_L, q_R, h_HLL, q_HLL, S_dx, q_star, S_dx_by_alph, lmbda_L, lmbda_R;
 	double lmbda_L_max, lmbda_R_max;
-	double * W_L = (double *) malloc(2 * sizeof(double));
-	double * W_R = (double *) malloc(2 * sizeof(double));
-	double * W_HLL = (double *) malloc(2 * sizeof(double));
-	double * W_flux_L = (double *) calloc(2, sizeof(double));
-	double * W_flux_R = (double *) calloc(2, sizeof(double));
-	double * h_stars = (double *) calloc(2, sizeof(double));
 	double height = 0.2, centre = 10.0; // Temporary. These will be the random walk
 	gen_Z_drain(nx, xs, Z, height, centre);
+
+	/* Make a replica of the initial conditions */
 	for (int j = 0; j < nx + 2; j++)
 		memcpy(W_forward[j], W[j], 2 * sizeof(double));
 	
@@ -594,6 +586,11 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 		prescribe_left_bcs(W, dx, t);
 		prescribe_right_bcs(W, nx);
 		output_data(W, Z, nx, t, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
+		for (int j = 0; j < nx + 2; j++) {
+			for (int m = 0; m < 2; m++)
+				printf("%lf ", W[j][m]);
+			printf("\n");
+		}
 
 		/* Iterate along each boundary (Riemann problem) */
 		for (int j = 0; j < nx + 1; j++) {
@@ -622,7 +619,13 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 
 		}
 		dt = compute_timestep(lmbda_L_max, lmbda_R_max, dx);
+		// for (int j = 1; j < nx + 1; j++) {
+		// 	for (int m = 0; m < 2; m++)
+		// 		W_forward[j][m] = W[j][m] - dt / dx * (lmbda_neg[j] * (W_L_stars[j][m] - W[j][m]) - lmbda_pos[j - 1] * (W_R_stars[j - 1][m] - W[j][m]));
+		// }
 		MUSCL_forward_solution(W_forward, W, dx, dt, nx, Z, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars);
+		for (int j = 0; j < nx + 2; j++)
+			memcpy(W_forward[j], W[j], 2 * sizeof(double));
 		t += dt, n++;
 
 	}
