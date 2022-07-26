@@ -11,7 +11,7 @@
 #include <assert.h>
 
 const double GR = 9.81;
-const double ZERO_THRESH = 1e-16;
+const double ZERO_THRESH = 1e-15;
 const double GLOB_EPS = 1e-10;
 const double C_CUTOFF = 1.35;
 const double m_glob = 0.5;
@@ -126,7 +126,6 @@ void compute_W_HLL(double * W_HLL, double lmbda_L, double lmbda_R, double * W_L,
 	flux(W_R, W_flux_R);
 	W_HLL[0] = (lmbda_R * W_R[0] - lmbda_L * W_L[0] + W_flux_L[0] - W_flux_R[0]) / (lmbda_R - lmbda_L);
 	W_HLL[1] = (lmbda_R * W_R[1] - lmbda_L * W_L[1] + W_flux_L[1] - W_flux_R[1]) / (lmbda_R - lmbda_L);
-	// printf("%lf\n", W_HLL[0]);
 	assert(W_HLL[0] >= 0.0);
 }
 
@@ -171,7 +170,7 @@ double compute_q_star(double q_HLL, double S_dx, double lmbda_L, double lmbda_R)
 	/**
 	 * This is the discharge component of the intermediate states. Note that there is only one since we set q_L* = q_R*
 	 */
-	return q_HLL * S_dx / (lmbda_R - lmbda_L);
+	return q_HLL + S_dx / (lmbda_R - lmbda_L);
 }
 
 
@@ -353,7 +352,7 @@ void numerical_flux(double * flux_vec, double * W_L, double * W_R, double lmbda_
 	flux(W_L, a_flux_L);
 	flux(W_R, a_flux_R);
 	for (int m = 0; m < 2; m++) {
-		a_flux[m] = 0.5 * (a_flux_L - a_flux_R);
+		a_flux[m] = 0.5 * (a_flux_L[m] + a_flux_R[m]);
 		b_flux[m] = 0.5 * lmbda_L * (W_L_star[m] - W_L[m]);
 		c_flux[m] = 0.5 * lmbda_R * (W_R_star[m] - W_R[m]);
 		flux_vec[m] = a_flux[m] + b_flux[m] + c_flux[m];
@@ -395,7 +394,7 @@ void g_eval(double * g_eval_vec, double * W_LM, double * W_ML, double * W_MR, do
 }
 
 
-void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double dt, int nx, double * Z, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars) {
+void MUSCL_forward_solution(double ** W, double dx, double dt, int nx, double * Z, double * lmbda_neg, double * lmbda_pos, double ** W_L_stars, double ** W_R_stars) {
 
 
 	/* -------------------------------------------------------------------------------------------------------------- */
@@ -557,7 +556,7 @@ void MUSCL_forward_solution(double ** W_forward, double ** W, double dx, double 
 }
 
 
-void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** W_R_stars, double * lmbda_neg, double * lmbda_pos, double * Z, double * xs, double * W_L, double * W_R, double * W_HLL, double * W_flux_L, double * W_flux_R, double * h_stars, int nx, double dx, double T_stop, double k, double gamma_of_k, double sig_theta, FILE * CURVE_DATA, FILE * TOP_DATA, FILE * TIMES) {
+int WB_solver(double ** W, double ** W_L_stars, double ** W_R_stars, double * lmbda_neg, double * lmbda_pos, double * Z, double * xs, double * W_L, double * W_R, double * W_HLL, double * W_flux_L, double * W_flux_R, double * h_stars, int nx, double dx, double T_stop, double k, double gamma_of_k, double sig_theta, FILE * CURVE_DATA, FILE * TOP_DATA, FILE * TIMES) {
 
 	/**
 	 * This is the well-balanced solver within which we apply the conservative formula. To do this we need to compute 	the time increment, the wave speeds and the intermediate states at each time iterate. We apply the conservative formula until T_stop is exceeded.
@@ -570,27 +569,15 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 	double lmbda_L_max, lmbda_R_max;
 	double height = 0.2, centre = 10.0; // Temporary. These will be the random walk
 	gen_Z_drain(nx, xs, Z, height, centre);
-
-	/* Make a replica of the initial conditions */
-	for (int j = 0; j < nx + 2; j++)
-		memcpy(W_forward[j], W[j], 2 * sizeof(double));
 	
 	while (t <= T_stop) {
 
-		lmbda_L_max = 0.0, lmbda_R_max = 0.0;
-		for (int j = 0; j < nx + 2; j++)
-			memcpy(W[j], W_forward[j], 2 * sizeof(double));
-
 		/* Assign the values of the ghost cells wrt the Neumann boundary conditions */
-		printf("t = %lf\n", t);
+		// printf("t = %.18lf\n", t);
+		lmbda_L_max = 0.0, lmbda_R_max = 0.0;
 		prescribe_left_bcs(W, dx, t);
 		prescribe_right_bcs(W, nx);
 		output_data(W, Z, nx, t, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
-		for (int j = 0; j < nx + 2; j++) {
-			for (int m = 0; m < 2; m++)
-				printf("%lf ", W[j][m]);
-			printf("\n");
-		}
 
 		/* Iterate along each boundary (Riemann problem) */
 		for (int j = 0; j < nx + 1; j++) {
@@ -619,17 +606,12 @@ void WB_solver(double ** W, double ** W_forward, double ** W_L_stars, double ** 
 
 		}
 		dt = compute_timestep(lmbda_L_max, lmbda_R_max, dx);
-		// for (int j = 1; j < nx + 1; j++) {
-		// 	for (int m = 0; m < 2; m++)
-		// 		W_forward[j][m] = W[j][m] - dt / dx * (lmbda_neg[j] * (W_L_stars[j][m] - W[j][m]) - lmbda_pos[j - 1] * (W_R_stars[j - 1][m] - W[j][m]));
-		// }
-		MUSCL_forward_solution(W_forward, W, dx, dt, nx, Z, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars);
-		for (int j = 0; j < nx + 2; j++)
-			memcpy(W_forward[j], W[j], 2 * sizeof(double));
+		MUSCL_forward_solution(W, dx, dt, nx, Z, lmbda_neg, lmbda_pos, W_L_stars, W_R_stars);
 		t += dt, n++;
 
 	}
-	fprintf(CURVE_DATA, "%d\n", n);
+
+	return n;
 
 }
 

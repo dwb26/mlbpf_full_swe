@@ -56,5 +56,5 @@ def update(n):
 	ax.set(ylim=np.min(Z_arr) - 0.1)
 	return line1, line2,
 
-ani = animation.FuncAnimation(fig, func=update, frames=range(0, total_length, 55))
+ani = animation.FuncAnimation(fig, func=update, frames=range(0, total_length, 25))
 plt.show()

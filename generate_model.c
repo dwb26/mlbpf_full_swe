@@ -16,7 +16,7 @@
 #include "solver.h"
 #include "generate_model.h"
 
-// This is the 1d shallow water equations model
+// This is the 1d full shallow water equations model
 
 double equal_runtimes_model(gsl_rng * rng, HMM * hmm, int ** N0s, int * N1s, w_double ** weighted_ref, int N_ref, int N_trials, int N_bpf, int * level0_meshes, int n_data, FILE * RAW_BPF_TIMES, FILE * RAW_BPF_KS, FILE * RAW_BPF_MSE, w_double ** ml_weighted, FILE * BPF_CENTILE_MSE, FILE * REF_XHATS, FILE * BPF_XHATS, int rng_counter) {
 
@@ -59,9 +59,8 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	double obs_sd = 0.1;
 	// double space_left = 1.0, space_right = 26.0;
 	double space_left = 0.0, space_right = 25.0;
-	double T_stop = 1000.0;
-	// double T_stop = 10.0;
-	double dx = (space_right - space_left) / (double) (nx + 1);
+	double T_stop = 100.0;
+	double dx = (space_right - space_left) / (double) (nx - 1);
 	double k = 5.5, theta = 2.0, obs;
 	double lower_bound = 1.5, upper_bound = 8.0 + lower_bound;
 	double height = 0.2, centre = 10.0;
@@ -77,7 +76,6 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	double * W_flux_R = (double *) calloc(2, sizeof(double));
 	double * h_stars = (double *) calloc(2, sizeof(double));
 	double ** W = (double **) malloc((nx + 2) * sizeof(double *));
-	double ** W_forward = (double **) malloc((nx + 2) * sizeof(double *));
 	double ** W_L_stars = (double **) malloc((nx + 1) * sizeof(double *));
 	double ** W_R_stars = (double **) malloc((nx + 1) * sizeof(double *));
 	char n_data_str[50], hmm_file_name[200];
@@ -91,7 +89,6 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	for (int j = 0; j < nx + 2; j++) {
 		xs[j] = space_left + (j - 1) * dx;
 		W[j] = (double *) calloc(2, sizeof(double));
-		W_forward[j] = (double *) calloc(2, sizeof(double));
 	}
 	for (int j = 0; j < nx + 1; j++) {
 		W_L_stars[j] = (double *) calloc(2, sizeof(double));
@@ -106,11 +103,12 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	output_hmm_parameters(DATA_OUT, length, sig_sd, obs_sd, space_left, space_right, nx, k, lower_bound, upper_bound);
 
 	/* Generate the data */
+	int n_count = 0;
 	for (int n = 0; n < length; n++) {
 
 		/* Generate the artificial HMM data points */
 		sig_theta = sigmoid(theta, upper_bound, lower_bound);
-		WB_solver(W, W_forward, W_L_stars, W_R_stars, lmbda_neg, lmbda_pos, Z, xs, W_L, W_R, W_HLL, W_flux_L, W_flux_R, h_stars, nx, dx, T_stop, k, gamma_of_k, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
+		n_count += WB_solver(W, W_L_stars, W_R_stars, lmbda_neg, lmbda_pos, Z, xs, W_L, W_R, W_HLL, W_flux_L, W_flux_R, h_stars, nx, dx, T_stop, k, gamma_of_k, sig_theta, CURVE_DATA, TOP_DATA, TIMES);
 		// obs = h[obs_pos] + gsl_ran_gaussian(rng, obs_sd);
 		obs = 0.0;
 		fprintf(DATA_OUT, "%.16e %.16e\n", sig_theta, obs);
@@ -119,6 +117,7 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 		theta = 0.9999 * theta + gsl_ran_gaussian(rng, sig_sd);
 
 	}
+	fprintf(CURVE_DATA, "%d\n", n_count);
 
 	fclose(DATA_OUT);
 	fclose(CURVE_DATA);
@@ -136,7 +135,6 @@ void generate_hmm(gsl_rng * rng, HMM * hmm, int n_data, int length, int nx) {
 	free(W_flux_R);
 	free(h_stars);
 	free(W);
-	free(W_forward);
 	free(W_L_stars);
 	free(W_R_stars);
 

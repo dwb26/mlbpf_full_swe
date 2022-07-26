@@ -35,7 +35,7 @@ static int compare (const void * a, const void * b)
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-// This is the 1d steady state shallow water equations model
+// This is the 1d full shallow water equations model
 int main(void) {
 
 	clock_t timer = clock();
